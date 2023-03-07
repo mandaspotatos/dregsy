@@ -29,26 +29,22 @@ import (
 
 const RelayID = "skopeo"
 
-//
 type RelayConfig struct {
 	Binary   string `yaml:"binary"`
 	CertsDir string `yaml:"certs-dir"`
+	Mode     string `yaml:"mode"`
 }
 
-//
 type Support struct{}
 
-//
 func (s *Support) Platform(p string) error {
 	return nil
 }
 
-//
 type SkopeoRelay struct {
 	wrOut io.Writer
 }
 
-//
 func NewSkopeoRelay(conf *RelayConfig, out io.Writer) *SkopeoRelay {
 
 	relay := &SkopeoRelay{}
@@ -63,12 +59,16 @@ func NewSkopeoRelay(conf *RelayConfig, out io.Writer) *SkopeoRelay {
 		if conf.CertsDir != "" {
 			certsBaseDir = conf.CertsDir
 		}
+		if conf.Mode != "" {
+			skopeoMode = conf.Mode
+		} else {
+			skopeoMode = "copy"
+		}
 	}
 
 	return relay
 }
 
-//
 func (r *SkopeoRelay) Prepare() error {
 
 	bufOut := new(bytes.Buffer)
@@ -82,12 +82,10 @@ func (r *SkopeoRelay) Prepare() error {
 	return nil
 }
 
-//
 func (r *SkopeoRelay) Dispose() error {
 	return nil
 }
 
-//
 func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 
 	srcCreds := util.DecodeJSONAuth(opt.SrcAuth)
@@ -95,7 +93,11 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 
 	cmd := []string{
 		"--insecure-policy",
-		"copy",
+		skopeoMode,
+	}
+	if skopeoMode == "sync" {
+		cmd = append(cmd, "--src=docker")
+		cmd = append(cmd, "--dest=docker")
 	}
 
 	if opt.SrcSkipTLSVerify {
@@ -138,10 +140,16 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 
 		log.WithFields(
 			log.Fields{"tag": t, "platform": opt.Platform}).Info("syncing tag")
-
-		rc := append(cmd,
-			fmt.Sprintf("docker://%s:%s", opt.SrcRef, t),
-			fmt.Sprintf("docker://%s:%s", opt.TrgtRef, t))
+		var rc []string
+		if skopeoMode == "copy" {
+			rc = append(cmd,
+				fmt.Sprintf("docker://%s:%s", opt.SrcRef, t),
+				fmt.Sprintf("docker://%s:%s", opt.TrgtRef, t))
+		} else {
+			rc = append(cmd,
+				fmt.Sprintf("%s:%s", opt.SrcRef, t),
+				fmt.Sprintf("%s", opt.TrgtRef))
+		}
 
 		switch opt.Platform {
 		case "":

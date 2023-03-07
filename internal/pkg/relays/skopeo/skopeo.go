@@ -35,25 +35,22 @@ const defaultCertsBaseDir = "/etc/skopeo/certs.d"
 
 var skopeoBinary string
 var certsBaseDir string
+var skopeoMode string
 
-//
 func init() {
 	skopeoBinary = defaultSkopeoBinary
 	certsBaseDir = defaultCertsBaseDir
 }
 
-//
 type tagList struct {
 	Repository string   `json:"Repository"`
 	Tags       []string `json:"Tags"`
 }
 
-//
 func CertsDirForRepo(r string) string {
 	return fmt.Sprintf("%s/%s", certsBaseDir, withoutPort(r))
 }
 
-//
 func ListAllTags(ref, creds, certDir string, skipTLSVerify bool) ([]string, error) {
 
 	ret, err := info([]string{"list-tags"}, ref, creds, certDir, skipTLSVerify)
@@ -69,7 +66,6 @@ func ListAllTags(ref, creds, certDir string, skipTLSVerify bool) ([]string, erro
 	return list.Tags, nil
 }
 
-//
 func Inspect(ref, platform, format, creds, certDir string, skipTLSVerify bool) (
 	string, error) {
 
@@ -86,7 +82,6 @@ func Inspect(ref, platform, format, creds, certDir string, skipTLSVerify bool) (
 	}
 }
 
-//
 func info(cmd []string, ref, creds, certDir string, skipTLSVerify bool) (
 	[]byte, error) {
 
@@ -114,7 +109,6 @@ func info(cmd []string, ref, creds, certDir string, skipTLSVerify bool) (
 	return bufOut.Bytes(), nil
 }
 
-//
 func addPlatformOverrides(cmd []string, platform string) []string {
 
 	if platform != "" {
@@ -133,7 +127,6 @@ func addPlatformOverrides(cmd []string, platform string) []string {
 	return cmd
 }
 
-//
 func chooseOutStream(out io.Writer, verbose, isErrorStream bool) io.Writer {
 	if verbose {
 		if out != nil {
@@ -147,7 +140,6 @@ func chooseOutStream(out io.Writer, verbose, isErrorStream bool) io.Writer {
 	return ioutil.Discard
 }
 
-//
 func runSkopeo(outWr, errWr io.Writer, verbose bool, args ...string) error {
 
 	cmd := exec.Command(skopeoBinary, args...)
@@ -166,7 +158,6 @@ func runSkopeo(outWr, errWr io.Writer, verbose bool, args ...string) error {
 	return nil
 }
 
-//
 func decodeTagList(tl []byte) (*tagList, error) {
 	var ret tagList
 	if err := json.Unmarshal(tl, &ret); err != nil {
@@ -175,7 +166,6 @@ func decodeTagList(tl []byte) (*tagList, error) {
 	return &ret, nil
 }
 
-//
 func withoutPort(repo string) string {
 	ix := strings.Index(repo, ":")
 	if ix == -1 {
