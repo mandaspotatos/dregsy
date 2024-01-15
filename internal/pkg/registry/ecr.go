@@ -23,12 +23,29 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	awsecr "github.com/aws/aws-sdk-go/service/ecr"
+	awsecrpub "github.com/aws/aws-sdk-go/service/ecrpublic"
+
+	"github.com/xelalexv/dregsy/internal/pkg/util"
 )
 
 //
-func IsECR(registry string) (ecr bool, region, account string) {
+func IsECR(registry string) (ecr, public bool, region, account string) {
+
+	if strings.HasSuffix(registry, "public.ecr.aws") {
+		ecr = true
+		public = true
+		if ix := strings.Index(registry, "@"); ix > -1 {
+			account = registry[:ix]
+			if ix = strings.Index(account, ":"); ix > -1 {
+				region = account[ix+1:]
+				account = account[:ix]
+			}
+		}
+		return
+	}
 
 	url := strings.Split(registry, ".")
 
@@ -109,4 +126,105 @@ func (e *ecr) getService() (*awsecr.ECR, error) {
 		return nil, err
 	}
 	return awsecr.New(sess, &aws.Config{Region: aws.String(e.region)}), nil
+}
+
+//
+func CreateECRTarget(ref, region, account string, public bool) error {
+
+	_, repo, _ := util.SplitRef(ref)
+	if len(repo) == 0 {
+		return nil
+	}
+
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+
+	if public {
+		return createECRPubTarget(sess, ref, repo, region, account)
+	} else {
+		return createECRTarget(sess, ref, repo, region, account)
+	}
+}
+
+//
+func createECRPubTarget(sess *session.Session, ref, repo, region, account string) error {
+
+	svc := awsecrpub.New(sess, &aws.Config{
+		Region: aws.String(region),
+	})
+
+	rp := repo
+	if p := strings.SplitN(repo, "/", 2); len(p) > 1 {
+		rp = p[1]
+	}
+
+	log.WithFields(log.Fields{"long": repo, "short": rp}).Debug("repo")
+
+	inpDescr := &awsecrpub.DescribeRepositoriesInput{
+		RegistryId:      aws.String(account),
+		RepositoryNames: []*string{aws.String(rp)},
+	}
+
+	out, err := svc.DescribeRepositories(inpDescr)
+	if err == nil && len(out.Repositories) > 0 {
+		log.WithField("ref", ref).Info("ECR public target already exists")
+		return nil
+	}
+
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() != awsecrpub.ErrCodeRepositoryNotFoundException {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	log.WithField("ref", ref).Info("creating ECR public target")
+	inpCrea := &awsecrpub.CreateRepositoryInput{
+		RepositoryName: aws.String(rp),
+	}
+
+	_, err = svc.CreateRepository(inpCrea)
+	return err
+}
+
+//
+func createECRTarget(sess *session.Session, ref, repo, region, account string) error {
+
+	svc := awsecr.New(sess, &aws.Config{
+		Region: aws.String(region),
+	})
+
+	inpDescr := &awsecr.DescribeRepositoriesInput{
+		RegistryId:      aws.String(account),
+		RepositoryNames: []*string{aws.String(repo)},
+	}
+
+	out, err := svc.DescribeRepositories(inpDescr)
+	if err == nil && len(out.Repositories) > 0 {
+		log.WithField("ref", ref).Info("ECR target already exists")
+		return nil
+	}
+
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() != awsecr.ErrCodeRepositoryNotFoundException {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	log.WithField("ref", ref).Info("creating ECR target")
+	inpCrea := &awsecr.CreateRepositoryInput{
+		RepositoryName: aws.String(repo),
+	}
+
+	_, err = svc.CreateRepository(inpCrea)
+	return err
 }

@@ -1,7 +1,7 @@
-# *dregsy* - Docker Registry Sync
+# *dregsy* - Container Registry Sync
 
 ## Synopsis
-*dregsy* lets you sync *Docker* images between registries, public or private. Several sync tasks can be defined, as one-off or periodic tasks (see *Configuration* section). An image is synced by using a *sync relay*. Currently, this can be either [*Skopeo*](https://github.com/containers/skopeo) or a local *Docker* daemon. When using the latter, the image is first pulled from the source, then tagged for the destination, and finally pushed there. *Skopeo* in contrast, can directly transfer an image from source to destination, which makes it the preferred choice.
+*dregsy* lets you sync container images between registries, public or private. Several sync tasks can be defined, as one-off or periodic tasks (see *Configuration* section). An image is synced by using a *sync relay*. Currently, this can be either [*Skopeo*](https://github.com/containers/skopeo) or a local *Docker* daemon. When using the latter, the image is first pulled from the source, then tagged for the destination, and finally pushed there. *Skopeo* in contrast, can directly transfer an image from source to destination, which makes it the preferred choice.
 
 
 ## Configuration
@@ -10,6 +10,9 @@ Sync tasks are defined in a YAML config file:
 ```yaml
 # relay type, either 'skopeo' or 'docker'
 relay: skopeo
+
+# whether to watch this config file and restart on change, defaults to false
+watch: true
 
 # relay config sections
 skopeo:
@@ -90,12 +93,20 @@ tasks:
 When syncing via a *Docker* relay, do not use the same *Docker* daemon for building local images (even better: don't use it for anything else but syncing). There is a risk that the reference to a locally built image clashes with the shorthand notation for a reference to an image on `docker.io`. E.g. if you built a local image `busybox`, then this would be indistinguishable from the shorthand `busybox` pointing to `docker.io/library/busybox`. One way to avoid this is to use `registry.hub.docker.com` instead of `docker.io` in references, which would never get shortened. If you're not syncing from/to `docker.io`, then all of this is not a concern.
 
 
-### Image Matching <sup>*&#946; feature*</sup>
+### Config File Watch & Restart <sup>*&#945; feature*</sup>
 
-The `mappings` section of a task can employ *Go* regular expressions for describing what images to sync, and how to change the destination path and name of an image. Details about how this works and examples can be found in this [design document](doc/design-image-matching.md). Also keep in mind that regular expressions can be surprising at times, so it would be a good idea to try them out first in a *Go* playground. You may otherwise potentially sync large numbers of images, clogging your target registry, or running into rate limits. Feedback about this feature is encouraged! 
+By setting `watch: true`, you can make *dregsy* watch the config file. If it changes, *dregsy* will restart. If there is a task currently being synced, *dregsy* waits for it to complete. The restart is a full restart, so if your config contains one-off tasks, they will be run. If *dregsy* was started with a task filter via the `run` option, this filter stays active. If the new config causes any validation errors, *dregsy* will stop. Note that the config file watch does not work if the file resides on an *NFS*, *SMB*, or *FUSE* file system (see the [fsnotify](https://github.com/fsnotify/fsnotify) package).
+
+#### Triggering Restart with `SIGHUP`
+You can also trigger a restart by sending `SIGHUP` to the *dregsy* process. This can be useful if you want more control over when a restart should occur, or you cannot use config file watch. The restart behavior is the same as outlined above for config file watch.
 
 
-### Tag Filtering <sup>*&#946; feature*</sup>
+### Image Matching
+
+The `mappings` section of a task can employ *Go* regular expressions for describing what images to sync, and how to change the destination path and name of an image. Details about how this works and examples can be found in this [design document](doc/design-image-matching.md). Also keep in mind that regular expressions can be surprising at times, so it would be a good idea to try them out first in a *Go* playground. You may otherwise potentially sync large numbers of images, clogging your target registry, or running into rate limits. Feedback about this feature is encouraged!
+
+
+### Tag Filtering
 
 The `tags` list of a task can use *semver* and regular expression filters, so you can do something like this:
 
@@ -107,7 +118,7 @@ tags:
   - 'latest'
 ```
 
-This would sync all tags describing versions equal to or larger than `1.31.0`, but lower than `1.31.9`, via the `semver:` filter. The `regex:` filter additionally syncs any `1.26.`*x* image with suffix `-glibc`, `-uclibc`, or `-musl`. Finally, the verbatim tags `1.29.4` and `latest` are also synced.
+This syncs all tags describing versions equal to or larger than `1.31.0`, but lower than `1.31.9`, via the `semver:` filter. The `regex:` filter additionally syncs any `1.26.`*x* image with suffix `-glibc`, `-uclibc`, or `-musl`. Finally, the verbatim tags `1.29.4` and `latest` are also synced.
 
 Note that the tags of an image need to conform to the *semver* specification *2.0.0* in order to be considered during filtering. The implementation uses the [blang/semver](https://github.com/blang/semver) lib. Have a look at their page or [the GoDoc](https://pkg.go.dev/github.com/blang/semver/v4) for more info on how to write *semver* filter expressions. Semver filtering handles tags starting with a `v` prefix. It also tolerates suffixes, for example platform IDs which are often used in tags, as long as the tag starts with a full *major.minor.patch* semver. Semver **filter expressions** however must not use a `v` prefix or any suffix.
 
@@ -115,18 +126,68 @@ Regex filters use standard *Go* regular expressions. When the first non-whitespa
 
 You can add multiple `semver:` and `regex:` filters under `tags`. Note however that the filters are simply ORed, i.e. a tag is synced if it satisfies at least one of the items under `tags`, be it semver, regex, or verbatim. So this is not a filter chain. Also, no sanity checks are done on the filters, so care must be taken to avoid competing or contradicting filters that select all or nothing at all.
 
-#### Tag Set Pruning <sup>*&#945; feature*</sup>
-Additionally it is possible to *prune* the resulting tag set with one or more `keep:` filters. These are regular expressions, identical to `regex:` filters (including inversion), but they get applied last, independent of where in the list they appear. If a tag in the filtered tag set does not match **all** of the `keep:` filters, it is removed from the set. This helps in defining tag filters that would be hard to describe with only *semver* and regular expressions. Here's an example for a source registry that attaches OS suffixes to their version tags, such as `2.1.4-buster`:
+#### Tag Set Pruning <sup>*&#946; feature*</sup>
+Additionally it is possible to *prune* the resulting tag set with one or more `keep:` filters. These are regular expressions, identical to `regex:` filters (including inversion), but they get applied last, independent of where in the list they appear. If a tag in the filtered tag set does not match **all** of the `keep:` filters, it is removed from the set. This helps in defining tag filters that would be hard to describe with only *semver* and regular expressions. Note however that `keep:` filters do not apply to verbatim tags!
+
+Here's an example for a source registry that attaches OS suffixes to their version tags, such as `2.1.4-buster`:
 
 ```yaml
 tags:
+  - 'latest'
   - 'semver: >=2.0.0'
   - 'keep: .+-(alpine|buster)'
 ```
 
-This will select all releases starting with version `2.0.0`, but only for the `-alpine` and `-buster` suffixes.
+This selects all releases starting with version `2.0.0`, but only for the `-alpine` and `-buster` suffixes. The `latest` tag however is still included in the sync.
 
-### Platform Selection (*Multi-Platform* Source Images) <sup>*&#945; feature*</sup>
+**Limiting the Tag Count** <sup>*&#945; feature*</sup>
+
+A special `keep:` directive is `keep: latest n`. This limits the set of tags to the latest *n* tags, and is enforced at the very end of tag set pruning, i.e. on the already pruned tag set. The latest tags are determined by sorting the tags as *semvers* in descending order and picking the first *n*. Any tags that are not legal *semvers* are kept, so the reduced set may actually contain more than *n* items. This allows to include certain verbatim tags such as `testing` or `qa` in addition to the latest *n* releases. However, if there are no legal *semver* tags in the set at all, the first *n* tags based on a descending string sort are picked.
+
+Here is an example:
+
+```yaml
+tags:
+  - 'glibc-tests'
+  - 'semver: >=1.34.0 <=1.36.0'
+  - 'keep: latest 5'
+```
+
+This selects all releases from version `1.34.0` through `1.36.0`, but limits them to the latest 5. The verbatim tag `glibc-tests` is always included.
+
+Keep the following in mind when using tag count limits:
+
+- Since for repositories using both *semver* and non-*semver* tags, the latter ones are always kept, use appropriate tag & pruning filters if there are many non-*semver* tags. This avoids overly large result sets, which could otherwise render tag count limiting useless.
+
+- For repositories with no *semver* tags, tag count limiting may not be suitable depending on what kind of tags are present. When sorted in string order, the tags need to represent their temporal order. Where for example arbitrary code names are used, this will not work.
+
+- If several `keep: latest` directives are specified in a `tags` list, the last one is used. 
+
+
+### Tags With Digests <sup>*&#945; feature*</sup>
+
+Verbatim tags in a `tags` list may also contain image digests to uniquely identify the requested image. The format for verbatim tags with digests is `[tag@]sha256:{digest value}`, i.e. the tag name can be dropped. As all verbatim tags, they can be mixed with tag filter expressions (see above). If a digest is present, the behavior is as follows:
+
+- When pulling from the source, the tag is dropped if present, and only the digest used. This is done to achieve consistent behavior between the *Skopeo* and *Docker* relays.
+
+    Background: *Skopeo* currently does not support both tag and digest in the same image reference and exits with an error. For *Docker*, the behavior depends on the version: up through version 1.13.1 and starting again with v20.10.20, *Docker* checks whether tag and digest match and throws an error if they don't. For versions in between, the tag is ignored.
+
+- When pushing to the target, the name if present is used and the digest dropped. Otherwise the digest is used.
+
+    If there is only a digest, the *Docker* relay auto-generates a tag of the format `dregsy-{digest value}`, since *Docker* does not support pushing by digest-only references. If tags of this format are not desired, specify tags for all digests in your sync config, which would then be used instead.
+
+Here's an example:
+
+```yaml
+tags:
+  - 'sha256:1d8a...'
+  - '1.36.0-uclibc@sha256:58f1...'
+```
+
+This syncs two distinct versions of an image, according to the given *SHA256* sums. For the second digest in the list, tag `1.36.0-uclibc` is created in the target repository.
+
+
+### Platform Selection (*Multi-Platform* Source Images) <sup>*&#946; feature*</sup>
 
 When the source image is a *multi-platform* image, the platform image adequate for the system on which *dregsy* runs is synced by default. Where this is not applicable, the desired platform can be specified via the `platform` setting, separately for each mapping. To sync all available platform images, `platform: all` can be used. Note however that this shorthand is only supported by the *Skopeo* relay.
 
@@ -135,7 +196,7 @@ To sync a selection of platform images from the same multi-platform source image
 
 ### Repository Validation & Client Authentication with TLS
 
-When connecting to source and target repository servers, TLS validation is performed to verify the identity of a server. If you're using self-signed certificates for a repo server, or a server's certificate cannot be validated with the CA bundle available on your system, you need to provide the required CA certs. The *dregsy* *Docker* image includes the CA bundle that comes with the *Alpine* base image. Also, if a repo server requires client authentication, i.e. mutual TLS, you need to provide an appropriate client key & cert pair.
+When connecting to source and target repository servers, TLS validation is performed to verify the identity of a server. If you're using self-signed certificates for a repo server, or a server's certificate cannot be validated with the CA bundle available on your system, you need to provide the required CA certs. The *dregsy* container image includes the CA bundle that comes with the *Alpine* base image. Also, if a repo server requires client authentication, i.e. mutual TLS, you need to provide an appropriate client key & cert pair.
 
 How you do that for *Docker* is [described here](https://docs.docker.com/engine/security/certificates/). The short version: create a folder under `/etc/docker/certs.d` with the same name as the repo server's host name, e.g. `source-registry.acme.com`, and place any required CA certs there as `*.crt` (mind the extension). Client key & cert pairs go there as well, as `*.key` and `*.cert`.
 
@@ -156,13 +217,13 @@ When using the `skopeo` relay, this is essentially the same, except that you spe
 - To skip TLS verification for a particular repo server when using the `docker` relay, you need to [configure the *Docker* daemon accordingly](https://docs.docker.com/registry/insecure/). With `skopeo`, you can easily set this in any source or target definition with the `skip-tls-verify` setting.
 
 
-### *AWS ECR*
+### *AWS ECR* (private & public)
 
-If a source or target is an *AWS ECR* registry, you need to retrieve the `auth` credentials via *AWS CLI*. They would however only be good for 12 hours, which is ok for one off tasks. For periodic tasks, or to avoid retrieving the credentials manually, you can specify an `auth-refresh` interval as a *Go* `Duration`, e.g. `10h`. If set, *dregsy* will initially and whenever the refresh interval has expired retrieve new access credentials. `auth` can be omitted when `auth-refresh` is set. Setting `auth-refresh` for anything other than an *AWS ECR* registry will raise an error.
+If a source (private registry only) or target (private & public) is an *AWS ECR* registry, you need to retrieve the `auth` credentials via *AWS CLI*. They would however only be good for 12 hours, which is ok for one off tasks. For periodic tasks, or to avoid retrieving the credentials manually, you can specify an `auth-refresh` interval as a *Go* `Duration`, e.g. `10h`. If set, *dregsy* will initially and whenever the refresh interval has expired retrieve new access credentials. `auth` can be omitted when `auth-refresh` is set. Setting `auth-refresh` for anything other than an *AWS ECR* registry will raise an error.
 
 Note however that you either need to set environment variables `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for the *AWS* account you want to use and a user with sufficient permissions. Or if you're running *dregsy* on an *EC2* instance in your *AWS* account, the machine should have an appropriate instance profile. An according policy could look like this:
 
-```json
+```JSON
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -192,11 +253,50 @@ Note however that you either need to set environment variables `AWS_ACCESS_KEY_I
 }
 ```
 
+
 ### *Google Container Registry (GCR)* and *Google Artifact Registry*
 
-If a source or target is a *Google Container Registry (GCR)* or a *Google Artifact Registry* for containers, `auth` may be omitted altogether. In this case either `GOOGLE_APPLICATION_CREDENTIALS` variable must be set (which is supposed to contain a path to a JSON file with credentials for a *GCP* service account), or *dregsy* must be run on a *GCE* instance with an appropriate service account attached. `registry` must be either specified as any of the *GCR* addresses (i.e. `gcr.io`, `us.gcr.io`, `eu.gcr.io`, or `asia.gcr.io`), or have the suffix `-docker.pkg.dev` for artifact registry. The `from`/`to` mapping must include your *GCP* project name (i.e. `your-project-123/your-image`). Note that `GOOGLE_APPLICATION_CREDENTIALS`, if set, takes precedence even on a *GCE* instance.
+If a source or target is a *Google Container Registry (GCR)* or a *Google Artifact Registry* for containers, `auth` may be omitted altogether. In this case either `GOOGLE_APPLICATION_CREDENTIALS` variable must be set (which is supposed to contain a path to a *JSON* file with credentials for a *GCP* service account), or *dregsy* must be run on a *GCE* instance with an appropriate service account attached. `registry` must be either specified as any of the *GCR* addresses (i.e. `gcr.io`, `us.gcr.io`, `eu.gcr.io`, or `asia.gcr.io`), or have the suffix `-docker.pkg.dev` for artifact registry. The `from`/`to` mapping must include your *GCP* project name (i.e. `your-project-123/your-image`). Note that `GOOGLE_APPLICATION_CREDENTIALS`, if set, takes precedence even on a *GCE* instance.
+
+If these mechanisms are not applicable in your use case, you can also authenticate with an *OAuth2* token as described in the [Artifact Registry Authentication -> Access token](https://cloud.google.com/artifact-registry/docs/docker/authentication#token) documentation. This token will then be used continuously without performing any authentication refreshes. In this case, set the content of `auth` to the base64 encoded *JSON* credentials:
+
+```JSON
+{
+    "username": "oauth2accesstoken",
+    "password": "<oauth2 token as described in the Artifact Registry documentation>"
+}
+```
 
 If you want to use *GCR* or artifact registry as the source for a public image, you can deactivate authentication all together by setting `auth` to `none`.
+
+
+### Keeping the Config [*Dry*](https://en.wikipedia.org/wiki/Don%27t_repeat_yourself) & Secure
+
+If you need to use the same configuration items in several places, for example when you want to sync the same image mapping from one source registry to several different destinations, you can use *YAML* [anchors & aliases](https://yaml.org/spec/1.2.2/#alias-nodes) to avoid duplication. For example:
+
+```YAML
+tasks:
+- name: one
+  source: &source
+    registry: source.reg
+  target:
+    registry: foo
+  mappings: &mappings
+  - from: library/busybox
+    to: base/library/busybox
+    tags: ['a', 'b', 'c']
+  - ...
+- name: two
+  source: *source
+  target:
+    registry: bar
+  mappings: *mappings
+```
+
+This sets the anchors `source` and `mappings` for the source registry and the desired mapping on their first occurrence, which are then referenced with `*source` and `*mappings` wherever else they are needed.
+
+If you want to avoid including secrets such as registry passwords in the config, you can put `${...}` style variables in their place, and use for example `envsubst` (either standard from package repos, or [this one](https://github.com/a8m/envsubst) for more options) to substitute them during deployment, while secrets are present in the environment.
+
 
 ## Usage
 
@@ -219,7 +319,7 @@ Logging behavior can be changed with these environment variables:
 ### Running Natively
 If you run *dregsy* natively on your system, with relay type `docker`, the *Docker* daemon of your system will be used as the relay for all sync tasks, so all synced images will wind up in the *Docker* storage of that daemon.
 
-### Running Inside a *Docker* Container
+### Running Inside a Container
 You can use the [*dregsy* image on Dockerhub](https://hub.docker.com/r/xelalex/dregsy/) for running *dregsy* containerized. There are two variants: one is based on *Alpine*, and suitable when you just want to run *dregsy*. The other variant is based on *Ubuntu*. It's somewhat larger, but may be better suited as a base when you want to extend the *dregsy* image. It's often easier to add things there than on *Alpine*, e.g. the *AWS* command line interface.
 
 With each release, three tags get published: `{version}-ubuntu`, `{version}-alpine`, and `{version}`, with the latter two referring to the same image. The same applies for `latest`. The *Skopeo* versions contained in the two variants may not always be exactly the same, but should only differ in patch level.
@@ -240,7 +340,7 @@ docker run --privileged --rm -v {path to config file}:/config.yaml -v /var/run/d
 
 ### Running On *Kubernetes*
 
-When you run a *Docker* registry inside your *Kubernetes* cluster as an image cache, *dregsy* can come in handy as an automated updater for that cache. The example config below uses the `skopeo` relay:
+When you run a container registry inside your *Kubernetes* cluster as an image cache, *dregsy* can come in handy as an automated updater for that cache. The example config below uses the `skopeo` relay:
 
 ```yaml
 relay: skopeo
@@ -308,7 +408,7 @@ spec:
 
 ### Building
 
-The `Makefile` has targets for building the binary and *Docker* image, and other stuff. Just run `make` to get a list of the targets, and info about configuration items. Note that for consistency, building is done inside a *Golang* build container, so you will need *Docker* to build. *dregsy*'s *Docker* image is based on *Alpine*, and installs *Skopeo* via `apk` during the image build.
+The `Makefile` has targets for building the binary and container image, and other stuff. Just run `make` to get a list of the targets, and info about configuration items. Note that for consistency, building is done inside a *Golang* build container, so you will need *Docker* to build. *dregsy*'s *Docker* image is based on *Alpine*, and installs *Skopeo* via `apk` during the image build.
 
 ### Testing
 
