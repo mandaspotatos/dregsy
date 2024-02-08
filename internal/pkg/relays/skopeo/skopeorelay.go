@@ -46,12 +46,7 @@ type SkopeoRelay struct {
 }
 
 func NewSkopeoRelay(conf *RelayConfig, out io.Writer) *SkopeoRelay {
-
-	relay := &SkopeoRelay{}
-
-	if out != nil {
-		relay.wrOut = out
-	}
+	relay := &SkopeoRelay{wrOut: out}
 	if conf != nil {
 		if conf.Binary != "" {
 			skopeoBinary = conf.Binary
@@ -62,10 +57,9 @@ func NewSkopeoRelay(conf *RelayConfig, out io.Writer) *SkopeoRelay {
 		if conf.Mode != "" {
 			skopeoMode = conf.Mode
 		} else {
-			skopeoMode = "copy"
+			skopeoMode = "copy" // Default to copy mode
 		}
 	}
-
 	return relay
 }
 
@@ -137,18 +131,15 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 	errs := false
 
 	for _, t := range tags {
-
-		log.WithFields(
-			log.Fields{"tag": t, "platform": opt.Platform}).Info("syncing tag")
+		src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, tag)
 		var rc []string
 		if skopeoMode == "copy" {
-			rc = append(cmd,
-				fmt.Sprintf("docker://%s:%s", opt.SrcRef, t),
-				fmt.Sprintf("docker://%s:%s", opt.TrgtRef, t))
+			src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t) // Corrected to use 't' instead of 'tag'
+			rc = append(cmd, fmt.Sprintf("docker://%s", src), fmt.Sprintf("docker://%s", trgt))
 		} else {
-			rc = append(cmd,
-				fmt.Sprintf("%s:%s", opt.SrcRef, t),
-				fmt.Sprintf("%s", opt.TrgtRef))
+			log.WithFields(
+				log.Fields{"tag": t, "platform": opt.Platform}).Info("syncing tag")
+				rc = append(cmd, fmt.Sprintf("docker://%s", opt.SrcRef), fmt.Sprintf("docker://%s", opt.TrgtRef))
 
 // src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t)
 // rc := append(cmd,
