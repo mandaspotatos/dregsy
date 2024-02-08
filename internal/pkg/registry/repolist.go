@@ -108,8 +108,7 @@ func NewRepoList(registry string, insecure bool, typ ListSourceType,
 				list.source = newECR(registry, region, account)
 			}
 		} else {
-			list.source = newCatalog(registry, insecure,
-				strings.HasSuffix(server, ".gcr.io"), listCreds)
+			list.source = newCatalog(registry, insecure, IsGCR(server), listCreds)
 		}
 
 	default:
@@ -174,6 +173,7 @@ func (l *RepoList) Get() ([]string, error) {
 	if ret, err := l.source.Retrieve(l.maxItems); err != nil {
 		return nil, err
 	} else {
+		log.Debugf("retrieved list: %v", ret)
 		l.cacheList(ret)
 		return ret, nil
 	}

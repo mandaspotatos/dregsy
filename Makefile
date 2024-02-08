@@ -18,8 +18,8 @@
 SHELL = /bin/bash
 
 REPO = dregsy
-DREGSY_VERSION = $$(git describe --always --tag --dirty)
-SKOPEO_VERSION = v1.11.2 # https://github.com/containers/skopeo/releases
+DREGSY_VERSION = $(shell git describe --always --tag --dirty)
+SKOPEO_VERSION = v1.14.1 # https://github.com/containers/skopeo/releases
 
 ROOT = $(shell pwd)
 BUILD_OUTPUT =_build
@@ -27,12 +27,12 @@ BINARIES = $(BUILD_OUTPUT)/bin
 ISOLATED_PKG = $(BUILD_OUTPUT)/pkg
 ISOLATED_CACHE = $(BUILD_OUTPUT)/cache
 
-GO_IMAGE = docker.io/golang:1.20.2
+GO_IMAGE = docker.io/golang:1.21.6
 # use digests of plain golang:{x:y:z} image
-GO_IMAGE_DIGEST_amd64 = 2101aa981e68ab1e06e3d4ac35ae75ed122f0380e5331e3ae4ba7e811bf9d256 # linux/amd64
-GO_IMAGE_DIGEST_arm64 = 2b66aad188b275018254d2877159381a05013fc8c5f695e9595a56fcfc83d995 # linux/arm64/v8
-GO_IMAGE_DIGEST_arm = 1cac9131c1684a9c407b618da17948780bfd061a91377f20df21b92066d6f9a1   # linux/arm/v7
-GO_IMAGE_DIGEST_386 = 5c3c6546290acfd0c5de02eae32fac9711d2831c3ad6f74fefa872981bf9cff7   # linux/386
+GO_IMAGE_DIGEST_amd64 = 5c7c2c9f1a930f937a539ff66587b6947890079470921d62ef1a6ed24395b4b3 # linux/amd64
+GO_IMAGE_DIGEST_arm64 = ea3f343e515dd6d4c39e82757c186040f2838ea91e935670433b0849f0813ab5 # linux/arm64/v8
+GO_IMAGE_DIGEST_arm = fb3420044a05d239f768b02fde6c987729379b631f44f27c917880fe3d632c7b   # linux/arm/v7
+GO_IMAGE_DIGEST_386 = 7fd31c31aab449c1cc9a6a4cd498ab20a018de2f64b7ed151bcef3305270dee5   # linux/386
 
 GOOS = $(shell uname -s | tr A-Z a-z)
 GOARCH = $(shell ./hack/devenvutil get_architecture)
@@ -86,6 +86,8 @@ GOARCH = $(shell ./hack/devenvutil get_architecture)
 #			the configured build folder are used. These folders are removed when
 #			running ${DIM}make clean${NRM}. That way you can force a clean build/test, where all
 #			dependencies are retrieved & built inside the container.
+#
+#	${ITL}CROSS=y${NRM}		set this to build binaries for various platforms & architectures
 #
 #	${ITL}TEST_ALPINE=n${NRM}	when using this with the test target, tests will not be performed
 #	${ITL}TEST_UBUNTU=n${NRM}	for the respective image (${ITL}Alpine${NRM} or ${ITL}Ubuntu${NRM} based)
@@ -166,15 +168,18 @@ publish:
 dregsy: prep
 #	build the ${ITL}dregsy${NRM} binary
 #
-	echo "os: $(GOOS), arch: $(GOARCH)"
-	docker run --rm --user $(shell id -u):$(shell id -g) \
-		-v $(shell pwd)/$(BINARIES):/go/bin $(CACHE_VOLS) \
-		-v $(shell pwd):/go/src/$(REPO) -w /go/src/$(REPO) \
-		-e CGO_ENABLED=0 -e GOOS=$(GOOS) -e GOARCH=$(GOARCH) \
-		$(GO_IMAGE)@sha256:$(GO_IMAGE_DIGEST_$(GOARCH)) bash -c \
-			"go mod tidy && go build -v -tags netgo -installsuffix netgo \
-			-ldflags \"-w -X main.DregsyVersion=$(DREGSY_VERSION)\" \
-			-o $(BINARIES)/dregsy ./cmd/dregsy/"
+	rm -f $(BINARIES)/dregsy
+ifneq ($(CROSS),y)
+	$(call utils, build_binary dregsy $(GOOS) $(GOARCH) keep)
+else
+	$(call utils, build_binary dregsy linux amd64 keep)
+	$(call utils, build_binary dregsy linux arm64)
+	$(call utils, build_binary dregsy linux arm)
+	$(call utils, build_binary dregsy linux 386)
+endif
+	unzip -q $(BINARIES)/dregsy_*_linux_amd64.zip -d $(BINARIES) 2>/dev/null \
+		|| true
+	cd $(BINARIES); sha256sum dregsy_*.zip > checksums.txt
 
 
 .PHONY: imgdregsy
