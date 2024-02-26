@@ -95,7 +95,10 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 
 	cmd := []string{
 		"--insecure-policy",
-		"copy",
+		skopeoMode,
+	}
+	if skopeoMode == "sync" {
+		cmd = append(cmd, "--src=docker", "--dest=docker")
 	}
 
 	if opt.SrcSkipTLSVerify {
@@ -106,12 +109,13 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 	}
 
 	srcCertDir := ""
-	reg, _, _ := util.SplitRef(opt.SrcRef)
+	srcRef, trgtRef := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t)
+	reg, _, _ := util.SplitRef(srcRef)
 	if reg != "" {
 		srcCertDir = CertsDirForRegistry(reg)
 		cmd = append(cmd, fmt.Sprintf("--src-cert-dir=%s", srcCertDir))
 	}
-	reg, _, _ = util.SplitRef(opt.TrgtRef)
+	reg, _, _ = util.SplitRef(trgtRef)
 	if reg != "" {
 		cmd = append(cmd, fmt.Sprintf(
 			"--dest-cert-dir=%s/%s", certsBaseDir, withoutPort(reg)))
@@ -125,6 +129,7 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 	}
 
 	tags, err := opt.Tags.Expand(func() ([]string, error) {
+		return ListAllTags(srcRef, srcCreds, srcCertDir, opt.SrcSkipTLSVerify)
 		return ListAllTags(opt.SrcRef, srcCreds, srcCertDir, opt.SrcSkipTLSVerify)
 	})
 
@@ -139,7 +144,7 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 		log.WithFields(
 			log.Fields{"tag": t, "platform": opt.Platform}).Info("syncing tag")
 
-		src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t)
+		src, trgt := srcRef, trgtRef
 		rc := append(cmd,
 			fmt.Sprintf("docker://%s", src), fmt.Sprintf("docker://%s", trgt))
 
