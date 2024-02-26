@@ -35,11 +35,13 @@ const defaultCertsBaseDir = "/etc/skopeo/certs.d"
 
 var skopeoBinary string
 var certsBaseDir string
+var skopeoMode string
 
 //
 func init() {
 	skopeoBinary = defaultSkopeoBinary
 	certsBaseDir = defaultCertsBaseDir
+	skopeoMode = "copy"
 }
 
 //

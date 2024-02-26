@@ -33,6 +33,7 @@ const RelayID = "skopeo"
 type RelayConfig struct {
 	Binary   string `yaml:"binary"`
 	CertsDir string `yaml:"certs-dir"`
+	Mode     string `yaml:"mode"`
 }
 
 //
@@ -63,6 +64,11 @@ func NewSkopeoRelay(conf *RelayConfig, out io.Writer) *SkopeoRelay {
 		if conf.CertsDir != "" {
 			certsBaseDir = conf.CertsDir
 		}
+		if conf.Mode != "" {
+			skopeoMode = conf.Mode
+		} else {
+			skopeoMode = "copy"  // Ensure default mode is "copy"
+		}
 	}
 
 	return relay
@@ -90,76 +96,77 @@ func (r *SkopeoRelay) Dispose() error {
 //
 func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 
-	srcCreds := util.DecodeJSONAuth(opt.SrcAuth)
-	destCreds := util.DecodeJSONAuth(opt.TrgtAuth)
+    srcCreds := util.DecodeJSONAuth(opt.SrcAuth)
+    destCreds := util.DecodeJSONAuth(opt.TrgtAuth)
 
-	cmd := []string{
-		"--insecure-policy",
-		"copy",
-	}
+    // Base command differs based on the skopeoMode
+    cmd := []string{"--insecure-policy"}
+    if skopeoMode == "sync" {
+        cmd = append(cmd, "sync")
+    } else { // Default to "copy"
+        cmd = append(cmd, "copy")
+    }
 
-	if opt.SrcSkipTLSVerify {
-		cmd = append(cmd, "--src-tls-verify=false")
-	}
-	if opt.TrgtSkipTLSVerify {
-		cmd = append(cmd, "--dest-tls-verify=false")
-	}
+    if opt.SrcSkipTLSVerify {
+        cmd = append(cmd, "--src-tls-verify=false")
+    }
+    if opt.TrgtSkipTLSVerify {
+        cmd = append(cmd, "--dest-tls-verify=false")
+    }
 
-	srcCertDir := ""
-	reg, _, _ := util.SplitRef(opt.SrcRef)
-	if reg != "" {
-		srcCertDir = CertsDirForRegistry(reg)
-		cmd = append(cmd, fmt.Sprintf("--src-cert-dir=%s", srcCertDir))
-	}
-	reg, _, _ = util.SplitRef(opt.TrgtRef)
-	if reg != "" {
-		cmd = append(cmd, fmt.Sprintf(
-			"--dest-cert-dir=%s/%s", certsBaseDir, withoutPort(reg)))
-	}
+    srcCertDir := ""
+    reg, _, _ := util.SplitRef(opt.SrcRef)
+    if reg != "" {
+        srcCertDir = CertsDirForRegistry(reg)
+        cmd = append(cmd, fmt.Sprintf("--src-cert-dir=%s", srcCertDir))
+    }
+    reg, _, _ = util.SplitRef(opt.TrgtRef)
+    if reg != "" {
+        cmd = append(cmd, fmt.Sprintf("--dest-cert-dir=%s/%s", certsBaseDir, util.WithoutPort(reg)))
+    }
 
-	if srcCreds != "" {
-		cmd = append(cmd, fmt.Sprintf("--src-creds=%s", srcCreds))
-	}
-	if destCreds != "" {
-		cmd = append(cmd, fmt.Sprintf("--dest-creds=%s", destCreds))
-	}
+    if srcCreds != "" {
+        cmd = append(cmd, fmt.Sprintf("--src-creds=%s", srcCreds))
+    }
+    if destCreds != "" {
+        cmd = append(cmd, fmt.Sprintf("--dest-creds=%s", destCreds))
+    }
 
-	tags, err := opt.Tags.Expand(func() ([]string, error) {
-		return ListAllTags(opt.SrcRef, srcCreds, srcCertDir, opt.SrcSkipTLSVerify)
-	})
+    tags, err := opt.Tags.Expand(func() ([]string, error) {
+        return util.ListAllTags(opt.SrcRef, srcCreds, srcCertDir, opt.SrcSkipTLSVerify)
+    })
 
-	if err != nil {
-		return fmt.Errorf("error expanding tags: %v", err)
-	}
+    if err != nil {
+        return fmt.Errorf("error expanding tags: %v", err)
+    }
 
-	errs := false
+    errs := false
 
-	for _, t := range tags {
+    for _, t := range tags {
 
-		log.WithFields(
-			log.Fields{"tag": t, "platform": opt.Platform}).Info("syncing tag")
+        log.WithFields(log.Fields{"tag": t, "platform": opt.Platform}).Info("syncing tag")
 
-		src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t)
-		rc := append(cmd,
-			fmt.Sprintf("docker://%s", src), fmt.Sprintf("docker://%s", trgt))
+        src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t)  // Used for both modes now
 
-		switch opt.Platform {
-		case "":
-		case "all":
-			rc = append(rc, "--all")
-		default:
-			rc = addPlatformOverrides(rc, opt.Platform)
-		}
+        rc := append(cmd, fmt.Sprintf("docker://%s", src), fmt.Sprintf("docker://%s", trgt))
 
-		if err := runSkopeo(r.wrOut, r.wrOut, opt.Verbose, rc...); err != nil {
-			log.Error(err)
-			errs = true
-		}
-	}
+        switch opt.Platform {
+        case "":
+        case "all":
+            rc = append(rc, "--all")
+        default:
+            rc = util.AddPlatformOverrides(rc, opt.Platform)
+        }
 
-	if errs {
-		return fmt.Errorf("errors during sync")
-	}
+        if err := util.RunSkopeo(r.wrOut, r.wrOut, opt.Verbose, rc...); err != nil {
+            log.Error(err)
+            errs = true
+        }
+    }
 
-	return nil
+    if errs {
+        return fmt.Errorf("errors during sync")
+    }
+
+    return nil
 }
