@@ -169,11 +169,5 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 	return nil
 }
        if skopeoMode == "sync" {
-               cmd = append(cmd, "--src=docker")
-               cmd = append(cmd, "--dest=docker")
-               skopeoMode,
-       }
-
-       if skopeoMode == "sync" {
                cmd = append(cmd, "--src=docker", "--dest=docker")
        }
