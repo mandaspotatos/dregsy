@@ -131,7 +131,7 @@ func (r *SkopeoRelay) Sync(opt *relays.SyncOptions) error {
 	errs := false
 
 	for _, t := range tags {
-		src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, tag)
+		src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t)
 		var rc []string
 		if skopeoMode == "copy" {
 			src, trgt := util.JoinRefsAndTag(opt.SrcRef, opt.TrgtRef, t) // Corrected to use 't' instead of 'tag'
